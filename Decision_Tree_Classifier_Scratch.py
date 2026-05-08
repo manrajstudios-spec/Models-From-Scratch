@@ -112,5 +112,5 @@ sk_tree = DecisionTreeClassifier(max_depth=5)
 sk_tree.fit(X_train, y_train)
 y_pred_sk = sk_tree.predict(X_test)
 
-print(f"My Model: {classification_report(y_test, y_pred)}")
-print(f"Sklearn:  {classification_report(y_test, y_pred_sk)}")
+print(f"My Model: {accuracy_score(y_test, y_pred)}")
+print(f"Sklearn:  {accuracy_score(y_test, y_pred_sk)}")
