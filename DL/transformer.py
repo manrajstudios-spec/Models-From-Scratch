@@ -222,7 +222,6 @@ def predict_one(input):
 
     return itos[next_tok]
 
-
 def predict(max_len):
     buf = list(text[:context_len])
 
