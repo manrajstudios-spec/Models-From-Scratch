@@ -80,3 +80,7 @@ python DL/transformer.py
 ```
 
 Training prints loss every 100 epochs. After training, `predict()` generates new text character by character.
+
+#Results Of Transfomer
+<img width="1395" height="511" alt="Screenshot From 2026-06-15 20-24-40" src="https://github.com/user-attachments/assets/3b730865-179a-480b-808e-e80ceadb95a0" />
+
