@@ -60,3 +60,4 @@ for b in back_list[::-1]:
             print(f"x.grad: {x.grad * temp}")
 
 print(saved)
+
