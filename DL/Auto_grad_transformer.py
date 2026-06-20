@@ -1,20 +1,15 @@
 import re
 import torch
-import auto_grad_modified
-
-class Node:
-    def __init__(self, x,b=False ,y=0):
-        self.val = x
-        self.grad = y
-        self.acc = b
+from auto_grad_modified import Node,AutoGrad
 
 with open("text.txt", "r") as f:
     text = f.read()
 
+text = text[:10000]
 text = re.sub(r'\n+', '\n', text)
 text = re.sub(r' +', ' ', text)
 text = text.strip()
-text = text[:10000]
+print(text)
 
 split = int(len(text) * 0.7)
 train_text = text[:split]
@@ -32,7 +27,7 @@ feed_for_dim = 128
 context_len = 64
 n_heads = 2
 
-embeddings = torch.randn(vocab_size, embedding_dim)*0.01
+embeddings = Node(torch.randn(vocab_size, embedding_dim)*0.01)
 
 def positional_encoding(seq_len):
     pe = torch.zeros(seq_len, embedding_dim)
@@ -48,7 +43,7 @@ def positional_encoding(seq_len):
 
 pe = positional_encoding(context_len)
 
-auto_grad = auto_grad_modified.AutoGrad()
+auto_grad = AutoGrad()
 
 scale = 1.0 / torch.sqrt(torch.tensor(embedding_dim, dtype=torch.float))
 
@@ -65,16 +60,22 @@ b2 = Node(torch.zeros(1,embedding_dim))
 w_p = Node(torch.randn(embedding_dim, vocab_size) * 0.01)
 b_p = Node(torch.zeros(1, vocab_size))
 
+g = Node(torch.ones(embedding_dim))
+b_ln = Node(torch.zeros(embedding_dim))
+
+g_2 = Node(torch.ones(embedding_dim))
+b_2_ln = Node(torch.zeros(embedding_dim))
+
 mask = torch.triu(torch.ones(context_len, context_len), diagonal=1)
 mask = mask.masked_fill(mask == 1, float('-inf'))
 
-for epoch in range(100):
+for epoch in range(501):
     for s in range(0,len(train_text) - context_len - 1 ,context_len):
         chunk = train_text[s:s+context_len]
         encoded_chunk = [stoi[c] for c in chunk]
         encoded_targets = torch.tensor([stoi[c] for c in train_text[s + 1:s + context_len + 1]])
 
-        X = Node(embeddings[encoded_chunk] + pe)
+        X = Node(embeddings.val[encoded_chunk] + pe)
 
         Q_list,K_list,V_list,scores_list,weights_list,out_list = [],[],[],[],[],[]
 
@@ -98,16 +99,23 @@ for epoch in range(100):
 
         concat = auto_grad.concat(out_list)
         att_out = auto_grad.mat_mul(concat, w_o)
+        att_out = auto_grad.layer_norm(att_out, embedding_dim, g, b_ln)
+        att_out = auto_grad.mat_add(att_out,X)
 
         z1 = auto_grad.mat_add(auto_grad.mat_mul(att_out,w1),b1,True)
         a1 = auto_grad.relu(z1)
         z2 = auto_grad.mat_add(auto_grad.mat_mul(a1,w2),b2,True)
+        z2 = auto_grad.layer_norm(z2, embedding_dim, g_2, b_2_ln)
+        z2 = auto_grad.mat_add(z2,att_out)
 
         projected_x = auto_grad.mat_add(auto_grad.mat_mul(z2,w_p),b_p,True)
-
         loss, probs = auto_grad.softmax_cross_entropy(projected_x, encoded_targets)
 
         auto_grad.backward()
         auto_grad.step(0.01)
         auto_grad.zero_grad()
         auto_grad.clear()
+
+        if epoch % 100 == 0:
+            print(f"e: {epoch}, l: {loss.val}")
+

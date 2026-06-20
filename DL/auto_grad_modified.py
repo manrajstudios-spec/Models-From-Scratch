@@ -1,4 +1,6 @@
 import torch
+from numpy.ma.core import multiply
+
 
 class Node:
     def __init__(self, val):
@@ -91,6 +93,45 @@ class AutoGrad:
 
         self.back_list.append(backward)
         self.track(a, b, out)
+
+        return out
+
+    def divide(self,a,b):
+        out = Node(a.val / b.val)
+
+        def back_ward():
+            a.grad += out.grad / b.val
+            b.grad -= out.grad * a.val / (b.val ** 2)
+
+        out.back_ward = back_ward
+
+        self.back_list.append(back_ward)
+        self.track(a, b, out)
+
+        return out
+
+    def subtract(self,a,b):
+        out = Node(a.val - b.val)
+
+        def back_ward():
+            a.grad -= out.grad
+            b.grad += out.grad
+
+        out.back_ward = back_ward
+        self.back_list.append(back_ward)
+        self.track(a, b, out)
+
+        return out
+
+    def sqrt(self,X):
+        out = Node(torch.sqrt(X.val))
+
+        def back_ward():
+            X.grad += out.grad * (0.5 * (1/out.val))
+
+        out.back_ward = back_ward
+        self.back_list.append(back_ward)
+        self.track(X,out)
 
         return out
 
@@ -199,3 +240,11 @@ class AutoGrad:
         self.back_list.append(backward)
         self.track(*nodes, out)
         return out
+
+    def layer_norm(self,X,d_model,g,b):
+        mean = self.divide(X.val.sum(dim=-1, keepdim=True),d_model)
+        diff = self.subtract(X,mean)
+        var = self.divide(diff.val.sum(dim=-1, keepdim=True),d_model)
+        std = self.sqrt(var + 1e-5)
+        x_norm = self.divide(X,std)
+        # out = Node(add(self.multiply(g,x_norm),))

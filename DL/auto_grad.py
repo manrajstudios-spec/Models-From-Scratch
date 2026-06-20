@@ -1,63 +1,124 @@
+import numpy as np
+
 class Node:
-    def __init__(self, x,b=False ,y=0):
+    def __init__(self, x):
         self.val = x
-        self.grad = y
-        self.acc = b
+        self.grad = np.zeros_like(x)
+        self.back_ward = lambda: None
 
 back_list = []
 
-def mul(a,b):
-    mul = a.val * b.val
-    a.grad = b.val
-    b.grad = a.val
-    back_list.append([a,b])
+def mat_mul(a, b,a_transpose,b_transpose):
+    val_a = a.val.T if a_transpose else a.val
+    val_b = b.val.T if b_transpose else b.val
 
-    return Node(mul,True)
+    out = Node(val_a@val_b)
 
-def add(a,b):
-    sume = a.val + b.val
-    a.grad = 1
-    b.grad = 1
+    def backward():
+        grad_a = out.grad @ val_b.T
+        grad_b = val_a.T @ out.grad
 
-    back_list.append([a,b])
-    return Node(sume,True)
+        grad_a = grad_a.T if a_transpose else grad_a
+        grad_b = grad_b.T if b_transpose else grad_b
 
-def relu(a):
-    r = max(0,a.val)
-    a.grad = 1 if a.val >= 0 else 0
-    back_list.append([a])
-    return Node(r,True)
+        a.grad += grad_a
+        b.grad += grad_b
 
-def loss(pred,y):
-    l = (pred.val - y) ** 2
-    pred.grad = 2 * (pred.val - y)
-    back_list.append([pred])
-    return l
+    return out
 
-x = Node(2,True)
-w1 = Node(3,False)
-w2 = Node(4,False)
-b1 = Node(2,False)
-b2 = Node(7,False)
-y = 10
+def mat_add(a,b,bias=False):
+    out = Node(a.val + b.val)
 
-z1 = add(mul(x,w1),b1)
-a1 = relu(z1)
-z2 = add(mul(a1,w2),b2)
-l = loss(z2,y)
+    def backward():
+        a.grad += out.grad
 
-grad = 1
-saved = []
-
-for b in back_list[::-1]:
-    temp = grad
-    for x in b:
-        if x.acc:
-            grad = grad * x.grad
-            print(f"grad: {grad}, temp: {temp}, X.grad: {x.grad}")
+        if bias:
+            b.grad += out.grad.sum(axis=1,keepdims=True)
         else:
-            saved.append({"value": x.val, "grad": x.grad * temp})
-            print(f"x.grad: {x.grad * temp}")
+            b.grad += out.grad
 
-print(saved)
+    back_list.append(backward)
+    out.back_ward = backward
 
+    return out
+
+def scale(X,sc):
+    out = Node(X.val * sc)
+
+    def backward():
+        X.grad += out.grad * sc
+
+    back_list.append(backward)
+    out.back_ward = backward
+
+    return out
+
+def relu(X):
+    out = Node(np.maximum(0,X.val))
+
+    def backward():
+        X.grad += out.grad * (1 if X.val >= 0 else 0)
+
+    back_list.append(backward)
+    out.back_ward = backward
+
+    return out
+
+def sigmoid(X):
+    out = Node(1/1+np.exp(-X.val))
+
+    def backward():
+        X.grad += out.grad * (out.val * (1 - out.val))
+
+    back_list.append(backward)
+    out.back_ward = backward
+
+    return out
+
+def tanh(X):
+    out = Node(np.tanh(X.val))
+
+    def backward():
+        X.grad += out.grad * (1-out.val ** 2)
+
+    back_list.append(backward)
+    out.back_ward = backward
+
+    return out
+
+def softmax(X):
+    s = np.exp(X.val - X.val.max(keepdims=True,axis=-1))
+    out = Node(s/s.sum(axis=-1,keepdims=True))
+
+    def backward():
+        s = np.sum(out.grad * out.val, axis=-1, keepdims=True)
+        local_grad = out.val * (out.grad - s)
+
+        X.grad += local_grad
+
+    back_list.append(backward)
+    out.back_ward = backward
+
+    return out
+
+def softmax_cross_entropy(X, targets):
+    exp_x = np.exp(X.val - np.max(X.val, axis=-1, keepdims=True))
+    probs = exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+
+    loss_val = -np.log(probs[np.arange(X.val.shape[0]), targets]).mean()
+
+    out = Node(loss_val)
+
+    def backward():
+        grad = probs.copy()
+
+        grad[np.arange(X.val.shape[0]), targets] -= 1
+
+        grad /= X.val.shape[0]
+
+        X.grad += out.grad * grad
+
+    back_list.append(backward)
+    out.back_ward = backward
+
+    return out, probs
