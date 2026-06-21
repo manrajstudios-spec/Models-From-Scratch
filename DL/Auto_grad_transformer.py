@@ -50,7 +50,7 @@ scale = 1.0 / torch.sqrt(torch.tensor(embedding_dim, dtype=torch.float))
 w_q_A = [Node(torch.randn(embedding_dim,attention_dim) * scale) for _ in range(n_heads)]
 w_k_A = [Node(torch.randn(embedding_dim,attention_dim) * scale) for _ in range(n_heads)]
 w_v_A = [Node(torch.randn(embedding_dim,attention_dim) * scale) for _ in range(n_heads)]
-w_o = Node(torch.randn(n_heads * attention_dim, embedding_dim))
+w_o = Node(torch.randn(n_heads * attention_dim, embedding_dim)*0.01)
 
 w1 = Node(torch.randn(embedding_dim,feed_for_dim) * 0.01)
 b1 = Node(torch.zeros(1,feed_for_dim))
@@ -75,14 +75,16 @@ for epoch in range(501):
         encoded_chunk = [stoi[c] for c in chunk]
         encoded_targets = torch.tensor([stoi[c] for c in train_text[s + 1:s + context_len + 1]])
 
-        X = Node(embeddings.val[encoded_chunk] + pe)
+        X_embed = auto_grad.embed(embeddings, encoded_chunk)
+        X = auto_grad.add(X_embed, Node(pe))
+        x_norm = auto_grad.layer_norm(X, g, b_ln)
 
         Q_list,K_list,V_list,scores_list,weights_list,out_list = [],[],[],[],[],[]
 
         for w_q,w_k,w_v in zip(w_q_A,w_k_A,w_v_A):
-            Q = auto_grad.mat_mul(X, w_q)
-            K = auto_grad.mat_mul(X, w_k)
-            V = auto_grad.mat_mul(X, w_v)
+            Q = auto_grad.mat_mul(x_norm, w_q)
+            K = auto_grad.mat_mul(x_norm, w_k)
+            V = auto_grad.mat_mul(x_norm, w_v)
 
             scores = auto_grad.mat_mul(Q,K,b_transpose=True)
             scores = auto_grad.scale(scores,1/torch.sqrt(torch.tensor(attention_dim, dtype=torch.float)))
@@ -99,23 +101,22 @@ for epoch in range(501):
 
         concat = auto_grad.concat(out_list)
         att_out = auto_grad.mat_mul(concat, w_o)
-        att_out = auto_grad.layer_norm(att_out, embedding_dim, g, b_ln)
         att_out = auto_grad.mat_add(att_out,X)
 
-        z1 = auto_grad.mat_add(auto_grad.mat_mul(att_out,w1),b1,True)
+        x_norm2 = auto_grad.layer_norm(att_out, g_2, b_2_ln)
+        z1 = auto_grad.mat_add(auto_grad.mat_mul(x_norm2,w1),b1,True)
         a1 = auto_grad.relu(z1)
         z2 = auto_grad.mat_add(auto_grad.mat_mul(a1,w2),b2,True)
-        z2 = auto_grad.layer_norm(z2, embedding_dim, g_2, b_2_ln)
         z2 = auto_grad.mat_add(z2,att_out)
 
         projected_x = auto_grad.mat_add(auto_grad.mat_mul(z2,w_p),b_p,True)
         loss, probs = auto_grad.softmax_cross_entropy(projected_x, encoded_targets)
-
         auto_grad.backward()
+
         auto_grad.step(0.01)
         auto_grad.zero_grad()
         auto_grad.clear()
 
         if epoch % 100 == 0:
-            print(f"e: {epoch}, l: {loss.val}")
+            print(epoch, loss.val)
 

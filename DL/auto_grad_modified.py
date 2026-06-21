@@ -1,6 +1,4 @@
 import torch
-from numpy.ma.core import multiply
-
 
 class Node:
     def __init__(self, val):
@@ -18,7 +16,7 @@ class AutoGrad:
 
     def zero_grad(self):
         for node in self.nodes:
-            node.grad = 0.0
+            node.grad = torch.zeros_like(node.val)
 
     def clear(self):
         self.back_list.clear()
@@ -241,10 +239,37 @@ class AutoGrad:
         self.track(*nodes, out)
         return out
 
-    def layer_norm(self,X,d_model,g,b):
-        mean = self.divide(X.val.sum(dim=-1, keepdim=True),d_model)
-        diff = self.subtract(X,mean)
-        var = self.divide(diff.val.sum(dim=-1, keepdim=True),d_model)
-        std = self.sqrt(var + 1e-5)
-        x_norm = self.divide(X,std)
-        # out = Node(add(self.multiply(g,x_norm),))
+    def layer_norm(self, X, g, b):
+        mean = X.val.mean(axis=-1, keepdims=True)
+        std = X.val.std(axis=-1, keepdims=True) + 1e-5
+        xhat = (X.val - mean) / std
+
+        out = Node(g.val * xhat + b.val)
+
+        def backward():
+            N = X.val.shape[-1]
+            dout = out.grad * g.val
+
+            dxhat = dout
+            dvar = (dxhat * (X.val - mean) * -0.5 * std ** -3).sum(axis=-1, keepdims=True)
+            dmean = (-dxhat / std).sum(dim=-1, keepdim=True)
+
+            X.grad += dxhat / std + dvar * 2 * (X.val - mean) / N + dmean / N
+            g.grad += (out.grad * xhat).sum(dim=0)
+            b.grad += out.grad.sum(dim=0)
+
+        out._backward = backward
+        self.back_list.append(backward)
+        self.track(X,out,g,b)
+        return out
+
+    def embed(self, embeddings, indices):
+        out = Node(embeddings.val[indices])
+
+        def backward():
+            for i, idx in enumerate(indices):
+                embeddings.grad[idx] += out.grad[i]
+
+        self.back_list.append(backward)
+        self.track(embeddings, out)
+        return out
