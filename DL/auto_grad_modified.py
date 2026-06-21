@@ -1,14 +1,18 @@
 import torch
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Node:
     def __init__(self, val):
         self.val = val
-        self.grad = torch.zeros_like(val)
+        self.grad = torch.zeros_like(val).to(device=device)
+        self.m = torch.zeros_like(val).to(device=device)
+        self.v = torch.zeros_like(val).to(device=device)
 
 class AutoGrad:
     def __init__(self):
         self.back_list = []
         self.nodes = set()
+        self.t = 0
 
     def track(self, *nodes):
         for n in nodes:
@@ -16,7 +20,7 @@ class AutoGrad:
 
     def zero_grad(self):
         for node in self.nodes:
-            node.grad = torch.zeros_like(node.val)
+            node.grad = torch.zeros_like(node.val).to(device=device)
 
     def clear(self):
         self.back_list.clear()
@@ -26,9 +30,16 @@ class AutoGrad:
         for back in self.back_list[::-1]:
             back()
 
-    def step(self, lr):
+    def step(self, lr=3e-4, beta1=0.9, beta2=0.999, eps=1e-8):
+        self.t+=1
         for node in self.nodes:
-            node.val -= lr * node.grad
+            node.m = beta1 * node.m + (1 - beta1) * node.grad
+            node.v = beta2 * node.v + (1 - beta2) * node.grad ** 2
+
+            m_hat = node.m / (1 - beta1 ** self.t)
+            v_hat = node.v / (1 - beta2 ** self.t)
+
+            node.val -= lr * m_hat / (torch.sqrt(v_hat) + eps)
 
     def multiply(self, a, b):
         out = Node(a.val * b.val)
@@ -261,6 +272,7 @@ class AutoGrad:
         out._backward = backward
         self.back_list.append(backward)
         self.track(X,out,g,b)
+
         return out
 
     def embed(self, embeddings, indices):
@@ -272,4 +284,5 @@ class AutoGrad:
 
         self.back_list.append(backward)
         self.track(embeddings, out)
+
         return out

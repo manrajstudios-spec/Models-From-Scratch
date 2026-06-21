@@ -2,6 +2,8 @@ import re
 import torch
 from auto_grad_modified import Node,AutoGrad
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 with open("text.txt", "r") as f:
     text = f.read()
 
@@ -27,17 +29,17 @@ feed_for_dim = 128
 context_len = 64
 n_heads = 2
 
-embeddings = Node(torch.randn(vocab_size, embedding_dim)*0.01)
+embeddings = Node(torch.randn(vocab_size, embedding_dim).to(device) *0.01)
 
 def positional_encoding(seq_len):
-    pe = torch.zeros(seq_len, embedding_dim)
-    pos = torch.arange(seq_len).unsqueeze(1)
+    pe = torch.zeros(seq_len, embedding_dim).to(device)
+    pos = torch.arange(seq_len).to(device).unsqueeze(1)
 
-    i = torch.arange(0, embedding_dim, 2)
-    div = torch.pow(10000, 2 * i / embedding_dim)
+    i = torch.arange(0, embedding_dim, 2).to(device)
+    div = torch.pow(10000, 2 * i / embedding_dim).to(device)
 
-    pe[:, 0::2] = torch.sin(pos / div)
-    pe[:, 1::2] = torch.cos(pos / div)
+    pe[:, 0::2] = torch.sin(pos / div).to(device)
+    pe[:, 1::2] = torch.cos(pos / div).to(device)
 
     return pe
 
@@ -45,74 +47,91 @@ pe = positional_encoding(context_len)
 
 auto_grad = AutoGrad()
 
-scale = 1.0 / torch.sqrt(torch.tensor(embedding_dim, dtype=torch.float))
+scale = 1.0 / torch.sqrt(torch.tensor(embedding_dim, dtype=torch.float).to(device))
 
-w_q_A = [Node(torch.randn(embedding_dim,attention_dim) * scale) for _ in range(n_heads)]
-w_k_A = [Node(torch.randn(embedding_dim,attention_dim) * scale) for _ in range(n_heads)]
-w_v_A = [Node(torch.randn(embedding_dim,attention_dim) * scale) for _ in range(n_heads)]
-w_o = Node(torch.randn(n_heads * attention_dim, embedding_dim)*0.01)
+w_q_A = [Node(torch.randn(embedding_dim,attention_dim).to(device) * scale) for _ in range(n_heads)]
+w_k_A = [Node(torch.randn(embedding_dim,attention_dim).to(device) * scale) for _ in range(n_heads)]
+w_v_A = [Node(torch.randn(embedding_dim,attention_dim).to(device) * scale) for _ in range(n_heads)]
+w_o = Node(torch.randn(n_heads * attention_dim, embedding_dim).to(device)*0.01)
 
-w1 = Node(torch.randn(embedding_dim,feed_for_dim) * 0.01)
-b1 = Node(torch.zeros(1,feed_for_dim))
-w2 = Node(torch.randn(feed_for_dim,embedding_dim) * 0.01)
-b2 = Node(torch.zeros(1,embedding_dim))
+w1 = Node(torch.randn(embedding_dim,feed_for_dim).to(device) * 0.01)
+b1 = Node(torch.zeros(1,feed_for_dim).to(device))
+w2 = Node(torch.randn(feed_for_dim,embedding_dim).to(device) * 0.01)
+b2 = Node(torch.zeros(1,embedding_dim).to(device))
 
-w_p = Node(torch.randn(embedding_dim, vocab_size) * 0.01)
-b_p = Node(torch.zeros(1, vocab_size))
+w_p = Node(torch.randn(embedding_dim, vocab_size).to(device) * 0.01)
+b_p = Node(torch.zeros(1, vocab_size).to(device))
 
-g = Node(torch.ones(embedding_dim))
-b_ln = Node(torch.zeros(embedding_dim))
+g = Node(torch.ones(embedding_dim).to(device))
+b_ln = Node(torch.zeros(embedding_dim).to(device))
 
-g_2 = Node(torch.ones(embedding_dim))
-b_2_ln = Node(torch.zeros(embedding_dim))
+g_2 = Node(torch.ones(embedding_dim).to(device))
+b_2_ln = Node(torch.zeros(embedding_dim).to(device))
 
-mask = torch.triu(torch.ones(context_len, context_len), diagonal=1)
+mask = torch.triu(torch.ones(context_len, context_len).to(device), diagonal=1).to(device)
 mask = mask.masked_fill(mask == 1, float('-inf'))
+
+def multi_attention(X,q_a,k_a,v_a,wo,mask):
+    Q_list,K_list,V_list,scores_list,weights_list,out_list = [],[],[],[],[],[]
+
+    for w_q,w_k,w_v in zip(q_a,k_a,v_a):
+        Q = auto_grad.mat_mul(X, w_q)
+        K = auto_grad.mat_mul(X, w_k)
+        V = auto_grad.mat_mul(X,w_v)
+
+        scores = auto_grad.mat_mul(Q,K,b_transpose=True)
+        scores = auto_grad.scale(scores,torch.tensor(attention_dim, dtype=torch.float).to(device))
+        scores.val += mask
+
+        weights = auto_grad.softmax(scores)
+        outs = auto_grad.mat_mul(weights, V)
+
+        Q_list.append(Q)
+        K_list.append(K)
+        V_list.append(V)
+        scores_list.append(scores)
+        weights_list.append(weights)
+        out_list.append(outs)
+
+    concat = auto_grad.concat(out_list)
+    att_out = auto_grad.mat_mul(concat, wo)
+
+    return att_out
+
+def feed_forward(att_X,w_1,w_2,b_1,b_2):
+    z1 = auto_grad.mat_add(auto_grad.mat_mul(att_X,w_1),b_1,True)
+    a1 = auto_grad.relu(z1)
+    z2 = auto_grad.mat_add(auto_grad.mat_mul(a1,w_2),b_2,True)
+
+    return z2
+
+def project(input,wp,bp):
+    projected = auto_grad.mat_add(auto_grad.mat_mul(input,w_p),b_p,True)
+    return projected
 
 for epoch in range(501):
     for s in range(0,len(train_text) - context_len - 1 ,context_len):
         chunk = train_text[s:s+context_len]
         encoded_chunk = [stoi[c] for c in chunk]
-        encoded_targets = torch.tensor([stoi[c] for c in train_text[s + 1:s + context_len + 1]])
+        encoded_targets = torch.tensor([stoi[c] for c in train_text[s + 1:s + context_len + 1]]).to(device)
 
         X_embed = auto_grad.embed(embeddings, encoded_chunk)
         X = auto_grad.add(X_embed, Node(pe))
+
         x_norm = auto_grad.layer_norm(X, g, b_ln)
 
-        Q_list,K_list,V_list,scores_list,weights_list,out_list = [],[],[],[],[],[]
-
-        for w_q,w_k,w_v in zip(w_q_A,w_k_A,w_v_A):
-            Q = auto_grad.mat_mul(x_norm, w_q)
-            K = auto_grad.mat_mul(x_norm, w_k)
-            V = auto_grad.mat_mul(x_norm, w_v)
-
-            scores = auto_grad.mat_mul(Q,K,b_transpose=True)
-            scores = auto_grad.scale(scores,1/torch.sqrt(torch.tensor(attention_dim, dtype=torch.float)))
-            scores.val += mask
-            weights = auto_grad.softmax(scores)
-            outs = auto_grad.mat_mul(weights, V)
-
-            Q_list.append(Q)
-            K_list.append(K)
-            V_list.append(V)
-            scores_list.append(scores)
-            weights_list.append(weights)
-            out_list.append(outs)
-
-        concat = auto_grad.concat(out_list)
-        att_out = auto_grad.mat_mul(concat, w_o)
+        att_out = multi_attention(X,w_q_A,w_k_A,w_v_A,w_o,mask)
         att_out = auto_grad.mat_add(att_out,X)
 
         x_norm2 = auto_grad.layer_norm(att_out, g_2, b_2_ln)
-        z1 = auto_grad.mat_add(auto_grad.mat_mul(x_norm2,w1),b1,True)
-        a1 = auto_grad.relu(z1)
-        z2 = auto_grad.mat_add(auto_grad.mat_mul(a1,w2),b2,True)
+
+        z2 = feed_forward(x_norm2,w1,w2,b1,b2)
         z2 = auto_grad.mat_add(z2,att_out)
 
-        projected_x = auto_grad.mat_add(auto_grad.mat_mul(z2,w_p),b_p,True)
+        projected_x = project(z2,w_p,b_p)
         loss, probs = auto_grad.softmax_cross_entropy(projected_x, encoded_targets)
-        auto_grad.backward()
 
+        auto_grad.backward()
         auto_grad.step(0.01)
         auto_grad.zero_grad()
         auto_grad.clear()
@@ -120,3 +139,39 @@ for epoch in range(501):
         if epoch % 100 == 0:
             print(epoch, loss.val)
 
+
+def generate(max_outs):
+    start_chunk = list(text[:context_len])
+
+    for i in range(max_outs):
+        chunk = start_chunk[-context_len:]
+
+        encoded_chunk = torch.tensor([stoi[c] for c in chunk]).to(device)
+
+        X_embed = auto_grad.embed(embeddings, encoded_chunk)
+        X = auto_grad.add(X_embed, Node(pe))
+        x_norm = auto_grad.layer_norm(X, g, b_ln)
+
+        att_out = multi_attention(x_norm,w_q_A,w_k_A,w_v_A,w_o,mask)
+
+        att_out = auto_grad.mat_add(att_out,X)
+
+        x_norm2 = auto_grad.layer_norm(att_out, g_2, b_2_ln)
+
+        z2 = feed_forward(x_norm2,w1,w2,b1,b2)
+
+        z2 = auto_grad.mat_add(z2,att_out)
+
+        projected_x = project(z2,w_p,b_p)
+
+        probs = auto_grad.softmax(projected_x)
+
+        preds = probs.val[-1]
+
+        j = preds.argmax().item()
+
+        print(itos[j])
+        start_chunk.append(itos[j])
+        auto_grad.clear()
+
+generate(100)
