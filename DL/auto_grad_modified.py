@@ -253,20 +253,20 @@ class AutoGrad:
     def layer_norm(self, X, g, b):
         mean = X.val.mean(axis=-1, keepdims=True)
         std = X.val.std(axis=-1, keepdims=True) + 1e-5
-        xhat = (X.val - mean) / std
+        x_norm = (X.val - mean) / std
 
-        out = Node(g.val * xhat + b.val)
+        out = Node(g.val * x_norm + b.val)
 
         def backward():
             N = X.val.shape[-1]
             dout = out.grad * g.val
 
-            dxhat = dout
-            dvar = (dxhat * (X.val - mean) * -0.5 * std ** -3).sum(axis=-1, keepdims=True)
-            dmean = (-dxhat / std).sum(dim=-1, keepdim=True)
+            dx_norm = dout
+            dstd = (dx_norm * (X.val - mean) * -0.5 * std ** -3).sum(axis=-1, keepdims=True)
+            dmean = (-dx_norm / std).sum(dim=-1, keepdim=True)
 
-            X.grad += dxhat / std + dvar * 2 * (X.val - mean) / N + dmean / N
-            g.grad += (out.grad * xhat).sum(dim=0)
+            X.grad += dx_norm / std + dstd * 2 * (X.val - mean) / N + dmean / N
+            g.grad += (out.grad * x_norm).sum(dim=0)
             b.grad += out.grad.sum(dim=0)
 
         out._backward = backward
