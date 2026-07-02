@@ -119,19 +119,6 @@ class AutoGrad:
 
         return out
 
-    def subtract(self,a,b):
-        out = Node(a.val - b.val)
-
-        def back_ward():
-            a.grad -= out.grad
-            b.grad += out.grad
-
-        out.back_ward = back_ward
-        self.back_list.append(back_ward)
-        self.track(a, b, out)
-
-        return out
-
     def sqrt(self,X):
         out = Node(torch.sqrt(X.val))
 
